@@ -2,8 +2,8 @@
 #include "tm_packet.h"
 //#include "tm_print.h"
 #else
-#include "../include/tm_packet.h"
-//#include "../include/tm_print.h"
+#include "tm_driver/tm_packet.h"
+//#include "tm_driver/tm_print.h"
 #endif
 
 #include <cstring>
@@ -22,6 +22,7 @@ const std::string TmPacket::HDR_CPERR = "CPERR";
 const std::string TmPacket::HDR_TMSCT = "TMSCT";
 const std::string TmPacket::HDR_TMSTA = "TMSTA";
 const std::string TmPacket::HDR_TMSVR = "TMSVR";
+const std::string TmPacket::PACKAGE_INCOMPLETE = "PACKAGE_INCOMPLETE";
 
 void TmPacket::setup_header(Header type)
 {
@@ -32,6 +33,7 @@ void TmPacket::setup_header(Header type)
 	case Header::TMSCT: header = HDR_TMSCT; break;
 	case Header::TMSTA: header = HDR_TMSTA; break;
 	case Header::TMSVR: header = HDR_TMSVR; break;
+	case Header::PACKAGE_INCOMPLETE : header = PACKAGE_INCOMPLETE; break;
 	case Header::OTHER: break;
 	}
 }
@@ -144,7 +146,12 @@ size_t TmPacket::build_packet_from_bytes(TmPacket &packet, const char *bytes, si
 	if (bytes[0] != P_HEAD) {
 		is_valid = false;
 	}
-	if (!is_valid) goto end;
+	if (!is_valid) {
+        print_warn("package header is not $");
+		packet.reset();
+		packet._size = ind_e;
+		return ind_e;
+	}//goto end;
 
 	//size_t ind_b = 1, ind_e = 1;
 
@@ -154,7 +161,12 @@ size_t TmPacket::build_packet_from_bytes(TmPacket &packet, const char *bytes, si
 	}
 	// didn't find header
 	if (ind_e + 8 > size) {
-		is_valid = false; goto end;
+		//is_valid = false; 
+		print_warn("didn't find header");
+		packet.reset();
+		packet._size = ind_e;
+		return ind_e;
+		//goto end;
 	}
 	// setup header
 	if (ind_e > 1) {
@@ -175,7 +187,11 @@ size_t TmPacket::build_packet_from_bytes(TmPacket &packet, const char *bytes, si
 	}
 	// didn't find length
 	if (ind_e + 7 > size) {
-		is_valid = false; goto end;
+		print_warn("didn't find package length");
+		packet.set_as_not_finish_data();
+		packet._size = ind_e;
+		return ind_e;
+		//is_valid = false; goto end;
 	}
 	// get length
 	if (ind_e > ind_b) {
@@ -187,7 +203,11 @@ size_t TmPacket::build_packet_from_bytes(TmPacket &packet, const char *bytes, si
 
 	// check length
 	if (ind_e + length + 6 > size || bytes[ind_e + length] != P_SEPR) {
-		is_valid = false; goto end;
+		//is_valid = false; goto end;
+		print_warn("package length not valid");
+		packet.set_as_not_finish_data();
+		packet._size = ind_e;
+		return ind_e;
 	}
 
 	// find and save data, and checksum
@@ -204,7 +224,11 @@ size_t TmPacket::build_packet_from_bytes(TmPacket &packet, const char *bytes, si
 	
 	// check checksum (P_CSUM)
 	if (bytes[ind_e] != P_CSUM) {
-		is_valid = false; goto end;
+		//is_valid = false; goto end;
+		print_warn("check sum not valid");
+		packet.set_as_not_finish_data();
+		packet._size = ind_e;
+		return ind_e;
 	}
 	++ind_e;
 	ind_b = ind_e;
@@ -215,7 +239,7 @@ size_t TmPacket::build_packet_from_bytes(TmPacket &packet, const char *bytes, si
 		std::stringstream ss;
 		ss << std::hex << bytes[ind_e] << bytes[ind_e + 1];
 		ss >> val;
-		packet._cs = char(val);
+		packet._cs = (char)(val);
 		if (cs != packet._cs) {
 			packet._is_cs_failed = true;
 			is_valid = false;
@@ -227,16 +251,22 @@ size_t TmPacket::build_packet_from_bytes(TmPacket &packet, const char *bytes, si
 	// check end
 	if (bytes[ind_e] != P_END1 || bytes[ind_e + 1] != P_END2) {
 		++ind_e;
-		is_valid = false; goto end;
+		print_warn("package end not valid");
+		packet.set_as_not_finish_data();
+		packet._size = ind_e;
+		return ind_e;
+		//is_valid = false; goto end;
 	}
 	ind_e += 2;
 	ind_b = ind_e;
 
 	packet._size = ind_e;
 	packet._is_valid = true;
-end:
+//end:
 	if (!is_valid) {
-		packet.reset();
+		print_warn("package not valid");
+		//packet.reset();
+		packet.set_as_not_finish_data();
 		packet._size = ind_e;
 	}
 	return ind_e;
@@ -295,7 +325,7 @@ TmSvrData::ErrorCode TmSvrData::_error_code(const char *buf)
 {
 	char cc[3] = { buf[0], buf[1], '\0' };
 	int ic = std::atoi(cc);
-	if (ic < int(ErrorCode::Other)) {
+	if (ic < (int)(ErrorCode::Other)) {
 		return ErrorCode(ic);
 	}
 	else {
@@ -484,7 +514,7 @@ void TmSvrData::build_bytes(std::vector<char> &bytes, const TmSvrData &data)
 	}
 	bytes.insert(bytes.end(), std::begin(data._transaction_id), std::end(data._transaction_id));
 	bytes.push_back(TmPacket::P_SEPR);
-	std::string smode = std::to_string(int(data._mode));
+	std::string smode = std::to_string((int)(data._mode));
 	bytes.insert(bytes.end(), std::begin(smode), std::end(smode));
 	bytes.push_back(TmPacket::P_SEPR);
 	size_t ind_b = bytes.size();
@@ -656,11 +686,14 @@ void TmSctData::build_TmSctData(TmSctData &data, const std::string &id, const ch
 	data._size = len + id.size() + 1;
 	data._is_valid = true;
 }
+void TmSctData::set_sct_data_has_error(bool err_status){
+	this->_sctDataHasError = err_status;
+}
 void TmSctData::build_TmSctData(TmSctData &data, const char *bytes, size_t size, SrcType type)
 {
 	data._is_copy = (type != SrcType::Shallow);
 	data._is_valid = false;
-	data._has_error = false;
+	data._sctDataHasError = false;
 	data._is_ok = false;
 	//size_t ind_b = 0;
 	size_t ind_e = 0;
@@ -694,7 +727,7 @@ void TmSctData::build_TmSctData(TmSctData &data, const char *bytes, size_t size,
 		data._is_ok = true;
 	}
 	else if (strncmp(data._script, "ERROR", 5) == 0) {
-		data._has_error = true;
+		data._sctDataHasError = true;
 	}	
 	data._is_valid = true;
 }

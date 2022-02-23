@@ -2,8 +2,8 @@
 #include "tm_communication.h"
 #include "tm_print.h"
 #else
-#include "../include/tm_communication.h"
-#include "../include/tm_print.h"
+#include "tm_driver/tm_communication.h"
+#include "tm_driver/tm_print.h"
 #endif
 
 #include <functional>
@@ -183,7 +183,6 @@ TmCommRC TmCommRecv::spin_once(int timeval_ms, int *n)
 	TmCommRC rc = TmCommRC::OK;
 	int nb = 0;
 	int rv = 0;
-	//int sp = 0;
 	timeval tv;
 
 	// fake
@@ -250,11 +249,12 @@ TmCommunication::TmCommunication(const char *ip, unsigned short port, int recv_b
 	, _port(port)
 	, _recv_buf_len(recv_buf_len)
 	, _sockfd(-1)
+	, _isConnected(false)
 	, _optflag(1)
 	, _recv_rc(TmCommRC::OK)
 	, _recv_ready(false)
 {
-	print_info("TmCommunication::TmCommunication");
+	print_debug("TmCommunication::TmCommunication");
 
 	_recv = new TmCommRecv(recv_buf_len);
 
@@ -276,7 +276,7 @@ TmCommunication::TmCommunication(const char *ip, unsigned short port, int recv_b
 
 TmCommunication::~TmCommunication()
 {
-	print_info("TmCommunication::~TmCommunication");
+	print_debug("TmCommunication::~TmCommunication");
 
 	delete _ip;
 	delete _recv;
@@ -285,6 +285,12 @@ TmCommunication::~TmCommunication()
 	// cleanup
 	WSACleanup();
 #endif
+}
+
+uint64_t TmCommunication::get_current_time_in_ms(){
+	std::chrono::system_clock::time_point tp = std::chrono::system_clock::now(); 
+	std::chrono::milliseconds ms = std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch());
+    return ms.count();
 }
 
 int TmCommunication::connect_with_timeout(int sockfd, const char *ip, unsigned short port, int timeout_ms)
@@ -297,7 +303,7 @@ int TmCommunication::connect_with_timeout(int sockfd, const char *ip, unsigned s
 	timeval tv;
 	fd_set wset;
 
-	print_info("TM_COM: ip:=%s", ip);
+	print_once("TM_COM: ip:=%s", ip);
 
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(port);
@@ -318,22 +324,24 @@ int TmCommunication::connect_with_timeout(int sockfd, const char *ip, unsigned s
 #endif
 
 	rv = connect(sockfd, (sockaddr *)&addr, 16);
-	print_info("TM_COM: rv:=%d", rv);
+	print_debug("TM_COM: rv:=%d", (int)rv);
 
 	if (rv < 0) {
 		if (errno != EINPROGRESS) return -1;
 	}
 	if (rv == 0) {
-		print_info("TM_COM: Connection is ok");
+		timeoutcount = 0;
+		print_debug("TM_COM: Connection is ok");
 		return rv;
 	}
 	else {
+		timeoutcount++; 
 		//Wait for Connect OK by checking Write buffer
 		if ((rv = select(sockfd + 1, NULL, &wset, NULL, &tv)) < 0) {
 			return rv;
 		}
 		if (rv == 0) {
-			print_warn("TM_COM: Connection timeout");
+			print_warn("TM_COM: Connection timeout count:=%d", (int)timeoutcount);
 			//errno = ETIMEDOUT;
 			return -1;
 		}
@@ -361,8 +369,9 @@ int TmCommunication::connect_with_timeout(int sockfd, const char *ip, unsigned s
 	return rv;
 }
 
-bool TmCommunication::Connect(int timeout_ms)
+bool TmCommunication::connect_socket( std::string errorName,int timeout_ms)
 {
+	_isConnected = false;
 	if (_sockfd > 0) return true;
 
 	if (timeout_ms < 0) timeout_ms = 0;
@@ -374,12 +383,14 @@ bool TmCommunication::Connect(int timeout_ms)
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_protocol = IPPROTO_HOPOPTS;
 
-	_sockfd = socket(hints.ai_family, hints.ai_socktype, hints.ai_protocol);
+	socketFile = socket(hints.ai_family, hints.ai_socktype, hints.ai_protocol);
 #else
-	_sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	socketFile = socket(AF_INET, SOCK_STREAM, 0);
 #endif
+    _sockfd = socketFile;
 	if (_sockfd < 0) {
-		print_error("TM_COM: Error socket");
+		std::string errorMsg = "TM_COM("+ errorName+"): Error socket";
+		print_error(errorMsg.c_str());
 		return false;
 	}
 
@@ -392,26 +403,30 @@ bool TmCommunication::Connect(int timeout_ms)
     timeout.tv_sec = timeout_ms/1000;
     timeout.tv_usec = 0;
 
-    if (setsockopt (_sockfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,
-                sizeof(timeout)) < 0){
-        print_info("setsockopt failed\n");
+    if (setsockopt (_sockfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,sizeof(timeout)) < 0){
+		std::string errorMsg = errorName + "setsockopt failed\n";
+        print_error(errorMsg.c_str());
 	}
 
-    if (setsockopt (_sockfd, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout,
-                sizeof(timeout)) < 0){
-        print_info("setsockopt failed\n");
+    if (setsockopt (_sockfd, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout,sizeof(timeout)) < 0){
+		std::string errorMsg = errorName + "setsockopt failed\n";
+        print_error(errorMsg.c_str());
 	}
-        
 
 	if (connect_with_timeout(_sockfd, _ip, _port, timeout_ms) == 0) {
-		print_info("TM_COM: O_NONBLOCK connection is ok");
+		std::string errorMsg = "TM_COM("+ errorName+"): O_NONBLOCK connection is ok";
+		print_debug(errorMsg.c_str());
+		_isConnected = true;
 	}
 	else {
-		print_info("TM_COM: O_NONBLOCK connection is fail");
+		std::string errorMsg = "TM_COM("+ errorName+"): O_NONBLOCK connection is fail";
+		print_debug(errorMsg.c_str());
 		_sockfd = -1;
+		_isConnected = false;
 	}
 	if (_sockfd > 0) {
-		print_info("TM_COM: TM robot is connected. sockfd:=%d", _sockfd);
+		std::string msg = "TM_COM(" + errorName + "): TM robot is connected. sockfd:=" + std::to_string((int)_sockfd);
+		print_info(msg.c_str());
 		//_is_connected = true;
 		return true;
 	}
@@ -420,17 +435,17 @@ bool TmCommunication::Connect(int timeout_ms)
 	}
 }
 
-void TmCommunication::Close()
+void TmCommunication::close_socket()
 {
+	_isConnected = false;
 	// reset
 	_recv_rc = TmCommRC::OK;
 	_recv_ready = false;
 
-	if (_sockfd <= 0) return;
 #ifdef _WIN32
-	closesocket((SOCKET)_sockfd);
+	closesocket((SOCKET)socketFile);
 #else
-	close(_sockfd);
+	close(socketFile);
 #endif
 	_sockfd = -1;
 }
@@ -471,7 +486,7 @@ TmCommRC TmCommunication::send_bytes_all(const char *bytes, int len, int *n)
 	int nleft = len;
 
 	while (ntotal < len) {
-		nb = send(_sockfd, bytes, nleft, 0);
+		nb = send(_sockfd, bytes + ntotal, nleft, 0);
 		if (nb < 0) {
 			rc = TmCommRC::ERR;
 			break;
@@ -502,6 +517,30 @@ TmCommRC TmCommunication::send_packet_(TmPacket &packet, int *n)
 	std::vector<char> bytes;
 	TmPacket::build_bytes(bytes, packet);
 	print_info(TmPacket::string_from_bytes(bytes).c_str());
+	if (bytes.size() > 0x1000)
+		return send_bytes_all(bytes.data(), bytes.size(), n);
+	else
+		return send_bytes(bytes.data(), bytes.size(), n);
+}
+
+TmCommRC TmCommunication::send_packet_silent(TmPacket &packet, int *n)
+{
+	std::vector<char> bytes;
+	TmPacket::build_bytes(bytes, packet);
+	return send_bytes(bytes.data(), bytes.size(), n);
+}
+
+TmCommRC TmCommunication::send_packet_silent_all(TmPacket &packet, int *n)
+{
+	std::vector<char> bytes;
+	TmPacket::build_bytes(bytes, packet);
+	return send_bytes_all(bytes.data(), bytes.size(), n);
+}
+
+TmCommRC TmCommunication::send_packet_silent_(TmPacket &packet, int *n)
+{
+	std::vector<char> bytes;
+	TmPacket::build_bytes(bytes, packet);
 	if (bytes.size() > 0x1000)
 		return send_bytes_all(bytes.data(), bytes.size(), n);
 	else
@@ -584,6 +623,9 @@ TmCommRC TmCommunication::recv_spin_once(int timeval_ms, int *n)
 			break;
 		}
 		++loop_cnt;
+	}
+	if(loop_cnt == 10 || pack_cnt == 10){
+		print_warn("sticky bag over 10 packages, to recevie data more fluently, please check your net!");
 	}
 	if (pack_cnt == 0) {
 		rc = TmCommRC::NOVALIDPACK;

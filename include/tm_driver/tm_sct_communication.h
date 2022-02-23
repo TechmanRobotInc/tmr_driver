@@ -16,14 +16,16 @@ private:
 	int _reconnect_timeval_ms = 3000;
 
 public:
-	TmCPError err_data{ TmCPError::Code::Ok };
+	TmCPError tmSctErrData{ TmCPError::Code::Ok };
 	TmSctData sct_data;
 	TmStaData sta_data;
 
 private:
-	std::mutex mtx_cpe;
+	std::mutex _mtx;
 	std::mutex mtx_sct;
 	std::mutex mtx_sta;
+    
+	bool &isOnListenNode;
 
 	//std::string _sct_res_id;
 	//std::string _sct_res_script;
@@ -33,24 +35,25 @@ private:
 
 public:
 	explicit TmSctCommunication(const std::string &ip,
-		int recv_buf_len, std::condition_variable *cv = nullptr);
+		int recv_buf_len,bool &isOnListenNode, std::condition_variable *cv = nullptr);
 	~TmSctCommunication();
 
-	bool start(int timeout_ms = 0);
+	bool start_tm_sct(int timeout_ms = 0);
 	void halt();
 
 	void set_reconnect_timeout(int timeout_ms)
 	{ _reconnect_timeout_ms = timeout_ms; }
 	void set_reconnect_timeval(int timeval_ms)
 	{ _reconnect_timeval_ms = timeval_ms; }
-
+    void check_script_is_exit(std::string script);
 	TmCommRC send_script_str(const std::string &id, const std::string &script);
+	TmCommRC send_script_str_silent(const std::string &id, const std::string &script);
 	TmCommRC send_script_exit();
 
 	TmCommRC send_sta_request(const std::string &subcmd, const std::string &subdata);
 
 public:
-	TmCPError::Code cperr_code() { return err_data.error_code(); }
+	TmCPError::Code cperr_code() { return tmSctErrData.error_code(); }
 	std::string sct_response(std::string &id)
 	{
 		id = sct_data.script_id();
@@ -73,7 +76,7 @@ public:
 	std::string mtx_sta_response(std::string &cmd);
 
 private:
-	void thread_function();
+	void tm_sct_thread_function();
 	void reconnect_function();
 public:
 	TmCommRC tmsct_function();
