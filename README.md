@@ -2,7 +2,7 @@
 
 This repository was deprecated.
 
-Note: If the user want to know how to use the ROS driver for TM Robot, please directly click the __TM ROS driver version__ listed in the table below.<br/>
+Note: If the user wants to know how to use the ROS driver for TM Robot, please directly click the __TM ROS driver version__ listed in the table below.<br/>
 
 |ROS Distro (ROS Environment Setup)|TM ROS driver version|TM ROS Vision|Remark: switch GitHub branches|
 |:---|:---|:---:|:---:|
